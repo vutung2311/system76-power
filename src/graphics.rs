@@ -1,5 +1,5 @@
 use std::{fs, io, process};
-use std::io::Write;
+use std::io::{Read, Write};
 
 use module::Module;
 use pci::{PciBus, PciDevice};
@@ -19,6 +19,7 @@ alias nvidia-modeset off
 "#;
 
 pub struct Graphics {
+    bbswitch: bool,
     pub bus: PciBus,
     pub intel: Vec<PciDevice>,
     pub nvidia: Vec<PciDevice>,
@@ -70,6 +71,7 @@ impl Graphics {
         }
 
         Ok(Graphics {
+            bbswitch: true,
             bus,
             intel,
             nvidia,
@@ -147,9 +149,23 @@ impl Graphics {
         }
     }
 
+    fn power_bbswitch(&self) -> io::Result<bool> {
+        let mut bbswitch = String::new();
+        fs::File::open("/proc/acpi/bbswitch")?.read_to_string(&mut bbswitch)?;
+        Ok(bbswitch.split(" ").nth(1) == Some("ON"))
+    }
+
+    fn power_pci(&self) -> io::Result<bool> {
+        Ok(self.nvidia.iter().chain(self.nvidia_hda.iter()).any(|dev| dev.path().exists()))
+    }
+
     pub fn get_power(&self) -> io::Result<bool> {
         if self.can_switch() {
-            Ok(self.nvidia.iter().chain(self.nvidia_hda.iter()).any(|dev| dev.path().exists()))
+            if self.bbswitch {
+                self.power_bbswitch()
+            } else {
+                self.power_pci()
+            }
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -158,55 +174,93 @@ impl Graphics {
         }
     }
 
+    fn enable_bbswitch(&self) -> io::Result<()> {
+        fs::OpenOptions::new()
+            .write(true)
+            .open("/proc/acpi/bbswitch")?
+            .write_all(b"ON")?;
+
+        Ok(())
+    }
+
+    fn enable_pci(&self) -> io::Result<()> {
+        self.bus.rescan()?;
+
+        Ok(())
+    }
+
+    fn disable_bbswitch(&self) -> io::Result<()> {
+        fs::OpenOptions::new()
+            .write(true)
+            .open("/proc/acpi/bbswitch")?
+            .write_all(b"OFF")?;
+
+        Ok(())
+    }
+
+    fn disable_pci(&self) -> io::Result<()> {
+        // Unbind NVIDIA audio devices
+        for dev in self.nvidia_hda.iter() {
+            if dev.path().exists() {
+                match dev.driver() {
+                    Ok(driver) => {
+                        info!("{}: Unbinding {}", driver.name(), dev.name());
+                        unsafe { driver.unbind(&dev) };
+                    },
+                    Err(err) => match err.kind() {
+                        io::ErrorKind::NotFound => (),
+                        _ => return Err(err),
+                    }
+                }
+            }
+        }
+
+        // Remove NVIDIA graphics and audio devices
+        for dev in self.nvidia.iter().chain(self.nvidia_hda.iter()) {
+            if dev.path().exists() {
+                match dev.driver() {
+                    Ok(driver) => {
+                        error!("{}: in use by {}", dev.name(), driver.name());
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "device in use"
+                        ));
+                    },
+                    Err(err) => match err.kind() {
+                        io::ErrorKind::NotFound => {
+                            info!("{}: Removing", dev.name());
+                            unsafe { dev.remove() }?;
+                        },
+                        _ => return Err(err),
+                    }
+                }
+            } else {
+                warn!("{}: Already removed", dev.name());
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn set_power(&self, power: bool) -> io::Result<()> {
         if self.can_switch() {
             if power {
                 info!("Enabling graphics power");
-                self.bus.rescan()?;
+
+                if self.bbswitch {
+                    self.enable_bbswitch()
+                } else {
+                    self.enable_pci()
+                }
             } else {
                 info!("Disabling graphics power");
 
-                // Unbind NVIDIA audio devices
-                for dev in self.nvidia_hda.iter() {
-                    if dev.path().exists() {
-                        match dev.driver() {
-                            Ok(driver) => {
-                                info!("{}: Unbinding {}", driver.name(), dev.name());
-                                unsafe { driver.unbind(&dev) };
-                            },
-                            Err(err) => match err.kind() {
-                                io::ErrorKind::NotFound => (),
-                                _ => return Err(err),
-                            }
-                        }
-                    }
-                }
-
-                // Remove NVIDIA graphics and audio devices
-                for dev in self.nvidia.iter().chain(self.nvidia_hda.iter()) {
-                    if dev.path().exists() {
-                        match dev.driver() {
-                            Ok(driver) => {
-                                error!("{}: in use by {}", dev.name(), driver.name());
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "device in use"
-                                ));
-                            },
-                            Err(err) => match err.kind() {
-                                io::ErrorKind::NotFound => {
-                                    info!("{}: Removing", dev.name());
-                                    unsafe { dev.remove() }?;
-                                },
-                                _ => return Err(err),
-                            }
-                        }
-                    } else {
-                        warn!("{}: Already removed", dev.name());
-                    }
+                if self.bbswitch {
+                    self.disable_bbswitch()
+                } else {
+                    self.disable_pci()
                 }
             }
-            Ok(())
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Other,
