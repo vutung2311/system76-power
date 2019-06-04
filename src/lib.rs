@@ -3,6 +3,8 @@ extern crate err_derive;
 extern crate intel_pstate as pstate;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate serde_derive;
 
 pub mod client;
 pub mod daemon;
@@ -43,4 +45,6 @@ pub trait Power {
 }
 
 // Helper function for errors
-pub(crate) fn err_str<E: ::std::fmt::Display>(err: E) -> String { format!("{}", err) }
+pub(crate) fn err_str<E: ::std::fmt::Display>(err: E) -> String {
+    format!("{}", err)
+}

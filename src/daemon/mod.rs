@@ -22,8 +22,10 @@ use crate::{
     Power, DBUS_IFACE, DBUS_NAME, DBUS_PATH,
 };
 
+mod config;
 mod profiles;
 
+use self::config::*;
 use self::profiles::*;
 
 static CONTINUE: AtomicBool = AtomicBool::new(true);
@@ -52,6 +54,7 @@ static PCI_RUNTIME_PM: AtomicBool = AtomicBool::new(false);
 fn pci_runtime_pm_support() -> bool { PCI_RUNTIME_PM.load(Ordering::SeqCst) }
 
 struct PowerDaemon {
+    config:              Config,
     graphics:            Graphics,
     power_profile:       String,
     profile_errors:      Vec<ProfileError>,
@@ -66,6 +69,7 @@ impl PowerDaemon {
     ) -> Result<PowerDaemon, String> {
         let graphics = Graphics::new().map_err(err_str)?;
         Ok(PowerDaemon {
+            config: Config::new(),
             graphics,
             power_profile: String::new(),
             profile_errors: Vec::new(),
@@ -76,19 +80,22 @@ impl PowerDaemon {
 
     fn apply_profile(
         &mut self,
-        func: fn(&mut Vec<ProfileError>),
         name: &str,
     ) -> Result<(), String> {
-        func(&mut self.profile_errors);
+        let name = name.to_lowercase();
+        let profile = self.config.profiles.get(&name)
+            .ok_or_else(|| String::from("Profile not found"))?;
+
+        apply_profile(profile, &mut self.profile_errors);
 
         let message =
-            self.power_switch_signal.msg(&DBUS_PATH.into(), &DBUS_NAME.into()).append1(name);
+            self.power_switch_signal.msg(&DBUS_PATH.into(), &DBUS_NAME.into()).append1(&name);
 
         if let Err(()) = self.dbus_connection.send(message) {
             error!("failed to send power profile switch message");
         }
 
-        self.power_profile = name.into();
+        self.power_profile = name;
 
         if self.profile_errors.is_empty() {
             Ok(())
@@ -105,15 +112,15 @@ impl PowerDaemon {
 
 impl Power for PowerDaemon {
     fn battery(&mut self) -> Result<(), String> {
-        self.apply_profile(battery, "Battery").map_err(err_str)
+        self.apply_profile("battery").map_err(err_str)
     }
 
     fn balanced(&mut self) -> Result<(), String> {
-        self.apply_profile(balanced, "Balanced").map_err(err_str)
+        self.apply_profile("balanced").map_err(err_str)
     }
 
     fn performance(&mut self) -> Result<(), String> {
-        self.apply_profile(performance, "Performance").map_err(err_str)
+        self.apply_profile("performance").map_err(err_str)
     }
 
     fn get_graphics(&mut self) -> Result<String, String> {
