@@ -47,7 +47,7 @@ fn signal_handling() {
 
 // Disabled by default because some systems have quirky ACPI tables that fail to resume from
 // suspension.
-static PCI_RUNTIME_PM: AtomicBool = AtomicBool::new(false);
+static PCI_RUNTIME_PM: AtomicBool = AtomicBool::new(true);
 
 // TODO: Whitelist system76 hardware that's known to work with this setting.
 fn pci_runtime_pm_support() -> bool { PCI_RUNTIME_PM.load(Ordering::SeqCst) }
@@ -195,7 +195,7 @@ impl Power for PowerDaemon {
 
 pub fn daemon() -> Result<(), String> {
     signal_handling();
-    let pci_runtime_pm = std::env::var("S76_POWER_PCI_RUNTIME_PM").ok().map_or(false, |v| v == "1");
+    let pci_runtime_pm = std::env::var("S76_POWER_PCI_RUNTIME_PM").ok().map_or(true, |v| v == "1");
 
     info!(
         "Starting daemon{}",
