@@ -63,7 +63,7 @@ pub fn balanced(errors: &mut Vec<ProfileError>, set_brightness: bool) {
 
 /// Sets parameters for the performance profile
 pub fn performance(errors: &mut Vec<ProfileError>, _set_brightness: bool) {
-    Dirty::default().set_max_lost_work(15);
+    Dirty::default().set_max_lost_work(30);
     LaptopMode::default().set(b"0");
     RadeonDevice::get_devices().for_each(|dev| dev.set_profiles("high", "performance", "auto"));
     catch!(errors, set_disk_power(254, 300000));
@@ -77,7 +77,7 @@ pub fn performance(errors: &mut Vec<ProfileError>, _set_brightness: bool) {
 
 /// Sets parameters for the battery profile
 pub fn battery(errors: &mut Vec<ProfileError>, set_brightness: bool) {
-    Dirty::default().set_max_lost_work(15);
+    Dirty::default().set_max_lost_work(60);
     LaptopMode::default().set(b"2");
     RadeonDevice::get_devices().for_each(|dev| dev.set_profiles("low", "battery", "low"));
     catch!(errors, set_disk_power(127, 15000));
